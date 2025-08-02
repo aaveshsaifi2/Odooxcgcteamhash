@@ -35,6 +35,8 @@
 - **Maps**: React Map GL with Mapbox integration
 - **State Management**: React Query for server state, Context API for auth
 
+- **Video link**: https://drive.google.com/drive/folders/1Em2qE0BVuOXW76cGcLNvRtMh5OKO_94y
+
 ### Project Structure
 ```
 civictrack/
