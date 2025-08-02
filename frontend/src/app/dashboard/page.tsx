@@ -8,27 +8,7 @@ import { toast } from 'react-hot-toast';
 import CreateIssueModal from '@/components/CreateIssueModal';
 import IssueCard from '@/components/IssueCard';
 import IssueFilters from '@/components/IssueFilters';
-
-interface Issue {
-  _id: string;
-  title: string;
-  description: string;
-  category: string;
-  status: string;
-  location: {
-    address: string;
-    coordinates: [number, number];
-  };
-  images: string[];
-  reporter: {
-    name: string;
-    email: string;
-  };
-  created_at: string;
-  updated_at: string;
-  upvotes: number;
-  downvotes: number;
-}
+import { Issue } from '@/types';
 
 export default function Dashboard() {
   const { user, token, logout } = useAuth();
@@ -100,9 +80,30 @@ export default function Dashboard() {
       });
 
       if (response.ok) {
-        toast.success('Issue created successfully!');
+        const result = await response.json();
+        toast.success(result.message || 'Issue created successfully!');
         setShowCreateModal(false);
-        fetchIssues();
+        
+        // Add the new issue to the current list for immediate feedback
+        if (result.issue) {
+          // Mark the new issue as recently created
+          const newIssue = { ...result.issue, isNewlyCreated: true };
+          setIssues(prevIssues => [newIssue, ...prevIssues]);
+          
+          // Remove the "newly created" flag after 3 seconds
+          setTimeout(() => {
+            setIssues(prevIssues => 
+              prevIssues.map(issue => 
+                issue.id === result.issue.id || issue._id === result.issue._id 
+                  ? { ...issue, isNewlyCreated: false }
+                  : issue
+              )
+            );
+          }, 3000);
+        } else {
+          // Fallback: refetch all issues
+          fetchIssues();
+        }
       } else {
         const error = await response.json();
         toast.error(error.message || 'Failed to create issue');

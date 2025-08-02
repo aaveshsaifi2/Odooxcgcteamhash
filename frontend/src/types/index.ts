@@ -11,24 +11,38 @@ export interface User {
 
 export interface Issue {
   id: string;
+  _id?: string; // MongoDB ObjectId for compatibility
   title: string;
   description: string;
   category: IssueCategory;
   status: IssueStatus;
   latitude: number;
   longitude: number;
+  location?: {
+    address: string;
+    coordinates: [number, number];
+    latitude?: number;
+    longitude?: number;
+  };
   address?: string;
   reporter_id?: string;
   reporter_name?: string;
+  reporter?: {
+    name: string;
+    email: string;
+  };
   is_anonymous: boolean;
   flag_count: number;
+  upvotes: number;
+  downvotes: number;
   is_hidden: boolean;
   image_count: number;
   distance?: number;
   created_at: string;
   updated_at: string;
-  images?: IssueImage[];
+  images?: Array<IssueImage | { image_path: string } | string>;
   status_logs?: StatusLog[];
+  isNewlyCreated?: boolean; // UI-only flag for highlighting newly created issues
 }
 
 export interface IssueImage {

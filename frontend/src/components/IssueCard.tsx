@@ -3,27 +3,7 @@
 import { useState } from 'react';
 import { MapPin, Calendar, User, Eye, ThumbsUp, ThumbsDown, MessageCircle, Flag } from 'lucide-react';
 import { toast } from 'react-hot-toast';
-
-interface Issue {
-  _id: string;
-  title: string;
-  description: string;
-  category: string;
-  status: string;
-  location: {
-    address: string;
-    coordinates: [number, number];
-  };
-  images: string[];
-  reporter: {
-    name: string;
-    email: string;
-  };
-  created_at: string;
-  updated_at: string;
-  upvotes: number;
-  downvotes: number;
-}
+import { Issue } from '@/types';
 
 interface IssueCardProps {
   issue: Issue;
@@ -49,6 +29,14 @@ const categoryIcons = {
 export default function IssueCard({ issue, onUpdate }: IssueCardProps) {
   const [showDetails, setShowDetails] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // Helper function to get image URL
+  const getImageUrl = (image: { image_path: string } | string) => {
+    if (typeof image === 'string') {
+      return image;
+    }
+    return `http://localhost:5001/uploads/${image.image_path}`;
+  };
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
@@ -108,7 +96,9 @@ export default function IssueCard({ issue, onUpdate }: IssueCardProps) {
   };
 
   return (
-    <div className="p-6 hover:bg-gray-50 transition-colors">
+    <div className={`p-6 hover:bg-gray-50 transition-colors ${
+      issue.isNewlyCreated ? 'bg-green-50 border-l-4 border-green-500' : ''
+    }`}>
       <div className="flex items-start justify-between">
         <div className="flex-1">
           <div className="flex items-center space-x-3 mb-2">
@@ -117,6 +107,11 @@ export default function IssueCard({ issue, onUpdate }: IssueCardProps) {
             <span className={`px-2 py-1 text-xs font-medium rounded-full ${statusColors[issue.status as keyof typeof statusColors] || statusColors.reported}`}>
               {issue.status.replace('_', ' ').toUpperCase()}
             </span>
+            {issue.isNewlyCreated && (
+              <span className="px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-800 animate-pulse">
+                NEW
+              </span>
+            )}
           </div>
 
           <p className="text-gray-600 mb-3 line-clamp-2">{issue.description}</p>
@@ -124,16 +119,16 @@ export default function IssueCard({ issue, onUpdate }: IssueCardProps) {
           <div className="flex items-center space-x-6 text-sm text-gray-500 mb-4">
             <div className="flex items-center">
               <MapPin className="w-4 h-4 mr-1" />
-              <span>{issue.location.address || 'Location not specified'}</span>
+              <span>{issue.location?.address || issue.address || 'Location not specified'}</span>
             </div>
             <div className="flex items-center">
               <Calendar className="w-4 h-4 mr-1" />
               <span>{formatDate(issue.created_at)}</span>
             </div>
-            {/* <div className="flex items-center">
+            <div className="flex items-center">
               <User className="w-4 h-4 mr-1" />
-              <span>{issue.reporter.name}</span>
-            </div> */}
+              <span> Aavesh saif</span>
+            </div>
           </div>
 
           {/* Images Preview */}
@@ -142,7 +137,7 @@ export default function IssueCard({ issue, onUpdate }: IssueCardProps) {
               {issue.images.slice(0, 3).map((image, index) => (
                 <img
                   key={index}
-                  src={image}
+                  src={getImageUrl(image)}
                   alt={`Issue ${index + 1}`}
                   className="w-16 h-16 object-cover rounded-lg border"
                 />
@@ -205,8 +200,7 @@ export default function IssueCard({ issue, onUpdate }: IssueCardProps) {
             <div>
               <h4 className="font-medium text-gray-900 mb-2">Location Details</h4>
               <div className="space-y-1 text-sm text-gray-600">
-                <p><strong>Address:</strong> {issue.location.address || 'Not specified'}</p>
-                <p><strong>Coordinates:</strong> {issue.location.coordinates ? `${issue.location.coordinates[0]}, ${issue.location.coordinates[1]}` : 'Not specified'}</p>
+                <p><strong>Address:</strong> {issue.location?.address || issue.address || 'Not specified'}</p>
                 <p><strong>Category:</strong> {issue.category}</p>
                 <p><strong>Status:</strong> {issue.status.replace('_', ' ')}</p>
               </div>
@@ -216,12 +210,12 @@ export default function IssueCard({ issue, onUpdate }: IssueCardProps) {
           {/* All Images */}
           {issue.images && issue.images.length > 0 && (
             <div className="mt-4">
-              <h4 className="font-medium text-gray-900 mb-2">All Images</h4>
+              <h4 className="font-medium text-gray-900 mb-2">All Images ({issue.image_count || issue.images.length})</h4>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 {issue.images.map((image, index) => (
                   <img
                     key={index}
-                    src={image}
+                    src={getImageUrl(image)}
                     alt={`Issue ${index + 1}`}
                     className="w-full h-32 object-cover rounded-lg border"
                   />
