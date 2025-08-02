@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { queryOne } = require('../database/database');
+const { queryOne, User } = require('../database/database');
 
 /**
  * Middleware to authenticate JWT token
@@ -22,10 +22,7 @@ const authenticateToken = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
     
     // Get user from database to ensure they still exist and aren't banned
-    const user = await queryOne(
-      'SELECT id, email, name, is_admin, is_banned FROM users WHERE id = ?',
-      [decoded.userId]
-    );
+    const user = await queryOne(User, { id: decoded.userId });
 
     if (!user) {
       return res.status(401).json({ 
@@ -89,10 +86,7 @@ const requireAdmin = (req, res, next) => {
  */
 const requireVerified = async (req, res, next) => {
   try {
-    const user = await queryOne(
-      'SELECT is_verified FROM users WHERE id = ?',
-      [req.user.id]
-    );
+    const user = await queryOne(User, { id: req.user.id });
 
     if (!user.is_verified) {
       return res.status(403).json({ 
@@ -128,10 +122,7 @@ const optionalAuth = async (req, res, next) => {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
     
-    const user = await queryOne(
-      'SELECT id, email, name, is_admin, is_banned FROM users WHERE id = ?',
-      [decoded.userId]
-    );
+    const user = await queryOne(User, { id: decoded.userId });
 
     if (user && !user.is_banned) {
       req.user = user;

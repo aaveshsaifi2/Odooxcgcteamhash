@@ -80,12 +80,24 @@ const issueFlagSchema = new mongoose.Schema({
   created_at: { type: Date, default: Date.now }
 });
 
+const issueVoteSchema = new mongoose.Schema({
+  id: { type: String, required: true, unique: true },
+  issue_id: { type: String, required: true },
+  user_id: { type: String, required: true },
+  vote_type: { type: String, enum: ['upvote', 'downvote'], required: true },
+  created_at: { type: Date, default: Date.now }
+});
+
+// Create compound index for unique user votes per issue
+issueVoteSchema.index({ issue_id: 1, user_id: 1 }, { unique: true });
+
 // Create models
 const User = mongoose.model('User', userSchema);
 const Issue = mongoose.model('Issue', issueSchema);
 const IssueImage = mongoose.model('IssueImage', issueImageSchema);
 const IssueStatusLog = mongoose.model('IssueStatusLog', issueStatusLogSchema);
 const IssueFlag = mongoose.model('IssueFlag', issueFlagSchema);
+const IssueVote = mongoose.model('IssueVote', issueVoteSchema);
 
 // Helper functions for database operations
 const query = async (model, filter = {}, options = {}) => {
@@ -156,6 +168,7 @@ module.exports = {
   IssueImage,
   IssueStatusLog,
   IssueFlag,
+  IssueVote,
   query,
   queryOne,
   run,

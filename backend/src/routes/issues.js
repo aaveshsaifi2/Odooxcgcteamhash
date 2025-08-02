@@ -10,6 +10,7 @@ const {
   IssueImage, 
   IssueStatusLog, 
   IssueFlag, 
+  IssueVote,
   User,
   query: dbQuery, 
   queryOne, 
@@ -75,8 +76,8 @@ router.get('/', [
   query('latitude').optional().isFloat({ min: -90, max: 90 }),
   query('longitude').optional().isFloat({ min: -180, max: 180 }),
   query('radius').optional().isFloat({ min: 0.1, max: 10 }),
-  query('category').optional().isIn(['roads', 'lighting', 'water_supply', 'cleanliness', 'public_safety', 'obstructions']),
-  query('status').optional().isIn(['reported', 'in_progress', 'resolved']),
+  query('category').optional().isIn(['all', 'roads', 'lighting', 'water supply', 'cleanliness', 'public safety', 'obstructions']),
+  query('status').optional().isIn(['all', 'reported', 'in_progress', 'resolved']),
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 50 })
 ], optionalAuth, asyncHandler(async (req, res) => {
@@ -98,11 +99,11 @@ router.get('/', [
   // Build filter
   const filter = { is_hidden: false };
   
-  if (category) {
+  if (category && category !== 'all') {
     filter.category = category;
   }
 
-  if (status) {
+  if (status && status !== 'all') {
     filter.status = status;
   }
 
@@ -111,11 +112,11 @@ router.get('/', [
     const latRange = radius / 111; // Rough conversion: 1 degree ≈ 111 km
     const lonRange = radius / (111 * Math.cos(latitude * Math.PI / 180));
     
-    filter.latitude = {
+    filter['location.latitude'] = {
       $gte: parseFloat(latitude) - latRange,
       $lte: parseFloat(latitude) + latRange
     };
-    filter.longitude = {
+    filter['location.longitude'] = {
       $gte: parseFloat(longitude) - lonRange,
       $lte: parseFloat(longitude) + lonRange
     };
@@ -150,8 +151,8 @@ router.get('/', [
     distance: latitude && longitude ? calculateDistance(
       parseFloat(latitude),
       parseFloat(longitude),
-      issue.latitude,
-      issue.longitude
+      issue.location.latitude,
+      issue.location.longitude
     ) : undefined
   }));
 
@@ -223,17 +224,10 @@ router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
  * Create a new issue
  * POST /api/issues
  */
-router.post('/', [
-  body('title').trim().isLength({ min: 5, max: 100 }).withMessage('Title must be between 5 and 100 characters'),
-  body('description').trim().isLength({ min: 10, max: 1000 }).withMessage('Description must be between 10 and 1000 characters'),
-  body('category').isIn(['roads', 'lighting', 'water_supply', 'cleanliness', 'public_safety', 'obstructions']).withMessage('Invalid category'),
-  body('latitude').isFloat({ min: -90, max: 90 }).withMessage('Valid latitude is required'),
-  body('longitude').isFloat({ min: -180, max: 180 }).withMessage('Valid longitude is required'),
-  body('address').optional().trim().isLength({ max: 200 }).withMessage('Address must be less than 200 characters'),
-  body('is_anonymous').optional().isBoolean().withMessage('is_anonymous must be a boolean')
-], upload.array('images', 5), asyncHandler(async (req, res) => {
+router.post('/', upload.array('images', 5), optionalAuth, asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
+    console.log('Validation errors:', errors.array());
     throw new ValidationError('Validation failed', errors.array());
   }
 
@@ -256,11 +250,14 @@ router.post('/', [
     title,
     description,
     category,
-    latitude: parseFloat(latitude),
-    longitude: parseFloat(longitude),
-    address,
+    location: {
+      latitude: parseFloat(latitude),
+      longitude: parseFloat(longitude),
+      address
+    },
     reporter_id: reporterId,
-    is_anonymous
+    is_anonymous,
+    is_hidden: false
   });
 
   // Process and save images
@@ -363,12 +360,97 @@ router.put('/:id/status', [
 }));
 
 /**
+ * Vote on an issue (upvote/downvote)
+ * POST /api/issues/:id/vote
+ */
+router.post('/:id/vote', [
+  body('type').isIn(['upvote', 'downvote']).withMessage('Vote type must be upvote or downvote')
+], optionalAuth, asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    throw new ValidationError('Validation failed', errors.array());
+  }
+
+  if (!req.user) {
+    throw new ForbiddenError('Authentication required');
+  }
+
+  const { id } = req.params;
+  const { type } = req.body;
+
+  // Check if issue exists
+  const issue = await queryOne(Issue, { id });
+  if (!issue) {
+    throw new NotFoundError('Issue not found');
+  }
+
+  // Prevent users from voting on their own issues
+  if (issue.reporter_id === req.user.id) {
+    throw new ForbiddenError('Cannot vote on your own issue');
+  }
+
+  // Check if user already voted on this issue
+  const existingVote = await queryOne(IssueVote, { issue_id: id, user_id: req.user.id });
+
+  if (existingVote) {
+    // Update existing vote
+    if (existingVote.vote_type === type) {
+      // Remove vote if clicking same button
+      await deleteOne(IssueVote, { id: existingVote.id });
+      await Issue.findOneAndUpdate(
+        { id },
+        { $inc: { [`${type}s`]: -1 } }
+      );
+      res.json({
+        message: 'Vote removed successfully',
+        upvotes: issue.upvotes + (type === 'upvote' ? -1 : 0),
+        downvotes: issue.downvotes + (type === 'downvote' ? -1 : 0)
+      });
+    } else {
+      // Change vote
+      await IssueVote.findOneAndUpdate({ id: existingVote.id }, { vote_type: type });
+      await Issue.findOneAndUpdate(
+        { id },
+        { 
+          $inc: { 
+            [`${type}s`]: 1,
+            [`${existingVote.vote_type}s`]: -1
+          } 
+        }
+      );
+      res.json({
+        message: 'Vote updated successfully',
+        upvotes: issue.upvotes + (type === 'upvote' ? 1 : -1),
+        downvotes: issue.downvotes + (type === 'downvote' ? 1 : -1)
+      });
+    }
+  } else {
+    // Create new vote
+    await run(IssueVote, {
+      id: uuidv4(),
+      issue_id: id,
+      user_id: req.user.id,
+      vote_type: type
+    });
+    await Issue.findOneAndUpdate(
+      { id },
+      { $inc: { [`${type}s`]: 1 } }
+    );
+    res.json({
+      message: 'Vote added successfully',
+      upvotes: issue.upvotes + (type === 'upvote' ? 1 : 0),
+      downvotes: issue.downvotes + (type === 'downvote' ? 1 : 0)
+    });
+  }
+}));
+
+/**
  * Flag an issue as inappropriate
  * POST /api/issues/:id/flag
  */
 router.post('/:id/flag', [
   body('reason').optional().trim().isLength({ max: 200 }).withMessage('Reason must be less than 200 characters')
-], asyncHandler(async (req, res) => {
+], optionalAuth, asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     throw new ValidationError('Validation failed', errors.array());
@@ -393,7 +475,7 @@ router.post('/:id/flag', [
   }
 
   // Check if user already flagged this issue
-  const existingFlag = await queryOne(IssueFlag, { issue_id: id, user_id: req.user.id });
+  const existingFlag = await queryOne(IssueFlag, { issue_id: id, flagged_by: req.user.id });
 
   if (existingFlag) {
     throw new ValidationError('You have already flagged this issue');
@@ -403,7 +485,7 @@ router.post('/:id/flag', [
   await run(IssueFlag, {
     id: uuidv4(),
     issue_id: id,
-    user_id: req.user.id,
+    flagged_by: req.user.id,
     reason
   });
 

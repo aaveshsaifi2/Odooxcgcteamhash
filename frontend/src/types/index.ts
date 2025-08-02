@@ -5,6 +5,7 @@ export interface User {
   phone?: string;
   is_verified: boolean;
   is_admin: boolean;
+  role?: string;
   created_at: string;
 }
 
