@@ -55,7 +55,7 @@ router.post('/register', [
 
   // Get created user (without password)
   const user = await queryOne(User, { id: userId });
-  const { password_hash, ...userWithoutPassword } = user.toObject();
+  const { password_hash, ...userWithoutPassword } = user;
 
   res.status(201).json({
     message: 'User registered successfully',
@@ -105,7 +105,7 @@ router.post('/login', [
   );
 
   // Remove password hash from response
-  const { password_hash, ...userWithoutPassword } = user.toObject();
+  const { password_hash, ...userWithoutPassword } = user;
 
   res.json({
     message: 'Login successful',
@@ -125,7 +125,7 @@ router.get('/profile', asyncHandler(async (req, res) => {
   }
 
   const user = await queryOne(User, { id: req.user.id });
-  const { password_hash, ...userWithoutPassword } = user.toObject();
+  const { password_hash, ...userWithoutPassword } = user;
 
   res.json({
     user: userWithoutPassword
