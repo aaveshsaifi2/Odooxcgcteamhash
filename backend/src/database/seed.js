@@ -1,6 +1,6 @@
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
-const { run, queryOne } = require('./database');
+const { run, queryOne, initializeTables } = require('./database');
 
 /**
  * Seed the database with sample data
@@ -8,6 +8,11 @@ const { run, queryOne } = require('./database');
 async function seedDatabase() {
   try {
     console.log('🌱 Starting database seeding...');
+
+    // Initialize tables first and wait for completion
+    console.log('🗄️ Initializing database tables...');
+    await initializeTables();
+    console.log('✅ Tables initialized successfully');
 
     // Create admin user
     const adminId = uuidv4();

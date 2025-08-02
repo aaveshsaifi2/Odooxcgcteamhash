@@ -17,7 +17,6 @@ const db = new sqlite3.Database(dbPath, (err) => {
     console.error('Error opening database:', err.message);
   } else {
     console.log('✅ Connected to SQLite database');
-    initializeTables();
   }
 });
 
@@ -25,91 +24,136 @@ const db = new sqlite3.Database(dbPath, (err) => {
  * Initialize database tables
  */
 function initializeTables() {
-  // Users table
-  db.run(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      name TEXT NOT NULL,
-      phone TEXT,
-      is_verified BOOLEAN DEFAULT FALSE,
-      is_admin BOOLEAN DEFAULT FALSE,
-      is_banned BOOLEAN DEFAULT FALSE,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+  return new Promise((resolve, reject) => {
+    // Users table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        name TEXT NOT NULL,
+        phone TEXT,
+        is_verified BOOLEAN DEFAULT FALSE,
+        is_admin BOOLEAN DEFAULT FALSE,
+        is_banned BOOLEAN DEFAULT FALSE,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `, (err) => {
+      if (err) {
+        console.error('Error creating users table:', err);
+        reject(err);
+        return;
+      }
 
-  // Issues table
-  db.run(`
-    CREATE TABLE IF NOT EXISTS issues (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      description TEXT NOT NULL,
-      category TEXT NOT NULL,
-      status TEXT DEFAULT 'reported',
-      latitude REAL NOT NULL,
-      longitude REAL NOT NULL,
-      address TEXT,
-      reporter_id TEXT,
-      is_anonymous BOOLEAN DEFAULT FALSE,
-      flag_count INTEGER DEFAULT 0,
-      is_hidden BOOLEAN DEFAULT FALSE,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (reporter_id) REFERENCES users (id)
-    )
-  `);
+      // Issues table
+      db.run(`
+        CREATE TABLE IF NOT EXISTS issues (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          description TEXT NOT NULL,
+          category TEXT NOT NULL,
+          status TEXT DEFAULT 'reported',
+          latitude REAL NOT NULL,
+          longitude REAL NOT NULL,
+          address TEXT,
+          reporter_id TEXT,
+          is_anonymous BOOLEAN DEFAULT FALSE,
+          flag_count INTEGER DEFAULT 0,
+          is_hidden BOOLEAN DEFAULT FALSE,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (reporter_id) REFERENCES users (id)
+        )
+      `, (err) => {
+        if (err) {
+          console.error('Error creating issues table:', err);
+          reject(err);
+          return;
+        }
 
-  // Issue images table
-  db.run(`
-    CREATE TABLE IF NOT EXISTS issue_images (
-      id TEXT PRIMARY KEY,
-      issue_id TEXT NOT NULL,
-      image_path TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (issue_id) REFERENCES issues (id) ON DELETE CASCADE
-    )
-  `);
+        // Issue images table
+        db.run(`
+          CREATE TABLE IF NOT EXISTS issue_images (
+            id TEXT PRIMARY KEY,
+            issue_id TEXT NOT NULL,
+            image_path TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (issue_id) REFERENCES issues (id) ON DELETE CASCADE
+          )
+        `, (err) => {
+          if (err) {
+            console.error('Error creating issue_images table:', err);
+            reject(err);
+            return;
+          }
 
-  // Issue status logs table
-  db.run(`
-    CREATE TABLE IF NOT EXISTS issue_status_logs (
-      id TEXT PRIMARY KEY,
-      issue_id TEXT NOT NULL,
-      status TEXT NOT NULL,
-      comment TEXT,
-      updated_by TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (issue_id) REFERENCES issues (id) ON DELETE CASCADE,
-      FOREIGN KEY (updated_by) REFERENCES users (id)
-    )
-  `);
+          // Issue status logs table
+          db.run(`
+            CREATE TABLE IF NOT EXISTS issue_status_logs (
+              id TEXT PRIMARY KEY,
+              issue_id TEXT NOT NULL,
+              status TEXT NOT NULL,
+              comment TEXT,
+              updated_by TEXT,
+              created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+              FOREIGN KEY (issue_id) REFERENCES issues (id) ON DELETE CASCADE,
+              FOREIGN KEY (updated_by) REFERENCES users (id)
+            )
+          `, (err) => {
+            if (err) {
+              console.error('Error creating issue_status_logs table:', err);
+              reject(err);
+              return;
+            }
 
-  // Issue flags table
-  db.run(`
-    CREATE TABLE IF NOT EXISTS issue_flags (
-      id TEXT PRIMARY KEY,
-      issue_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      reason TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (issue_id) REFERENCES issues (id) ON DELETE CASCADE,
-      FOREIGN KEY (user_id) REFERENCES users (id),
-      UNIQUE(issue_id, user_id)
-    )
-  `);
+            // Issue flags table
+            db.run(`
+              CREATE TABLE IF NOT EXISTS issue_flags (
+                id TEXT PRIMARY KEY,
+                issue_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                reason TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (issue_id) REFERENCES issues (id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users (id),
+                UNIQUE(issue_id, user_id)
+              )
+            `, (err) => {
+              if (err) {
+                console.error('Error creating issue_flags table:', err);
+                reject(err);
+                return;
+              }
 
-  // Create indexes for better performance
-  db.run('CREATE INDEX IF NOT EXISTS idx_issues_location ON issues(latitude, longitude)');
-  db.run('CREATE INDEX IF NOT EXISTS idx_issues_category ON issues(category)');
-  db.run('CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status)');
-  db.run('CREATE INDEX IF NOT EXISTS idx_issues_reporter ON issues(reporter_id)');
-  db.run('CREATE INDEX IF NOT EXISTS idx_issues_created ON issues(created_at)');
-  db.run('CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)');
+              // Create indexes for better performance
+              db.run('CREATE INDEX IF NOT EXISTS idx_issues_location ON issues(latitude, longitude)', (err) => {
+                if (err) console.error('Error creating location index:', err);
+              });
+              db.run('CREATE INDEX IF NOT EXISTS idx_issues_category ON issues(category)', (err) => {
+                if (err) console.error('Error creating category index:', err);
+              });
+              db.run('CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status)', (err) => {
+                if (err) console.error('Error creating status index:', err);
+              });
+              db.run('CREATE INDEX IF NOT EXISTS idx_issues_reporter ON issues(reporter_id)', (err) => {
+                if (err) console.error('Error creating reporter index:', err);
+              });
+              db.run('CREATE INDEX IF NOT EXISTS idx_issues_created ON issues(created_at)', (err) => {
+                if (err) console.error('Error creating created index:', err);
+              });
+              db.run('CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)', (err) => {
+                if (err) console.error('Error creating email index:', err);
+              });
 
-  console.log('✅ Database tables initialized');
+              console.log('✅ Database tables initialized');
+              resolve();
+            });
+          });
+        });
+      });
+    });
+  });
 }
 
 /**
