@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const { body, validationResult } = require('express-validator');
-const { queryOne, run } = require('../database/database');
+const { User, queryOne, run } = require('../database/database');
 const { asyncHandler, ValidationError, UnauthorizedError } = require('../middleware/errorHandler');
 
 const router = express.Router();
@@ -27,7 +27,7 @@ router.post('/register', [
   const { email, password, name, phone } = req.body;
 
   // Check if user already exists
-  const existingUser = await queryOne('SELECT id FROM users WHERE email = ?', [email]);
+  const existingUser = await queryOne(User, { email });
   if (existingUser) {
     throw new ValidationError('User with this email already exists');
   }
@@ -38,10 +38,13 @@ router.post('/register', [
 
   // Create user
   const userId = uuidv4();
-  await run(
-    'INSERT INTO users (id, email, password_hash, name, phone) VALUES (?, ?, ?, ?, ?)',
-    [userId, email, passwordHash, name, phone]
-  );
+  await run(User, {
+    id: userId,
+    email,
+    password_hash: passwordHash,
+    name,
+    phone
+  });
 
   // Generate JWT token
   const token = jwt.sign(
@@ -51,14 +54,12 @@ router.post('/register', [
   );
 
   // Get created user (without password)
-  const user = await queryOne(
-    'SELECT id, email, name, phone, is_verified, is_admin, created_at FROM users WHERE id = ?',
-    [userId]
-  );
+  const user = await queryOne(User, { id: userId });
+  const { password_hash, ...userWithoutPassword } = user.toObject();
 
   res.status(201).json({
     message: 'User registered successfully',
-    user,
+    user: userWithoutPassword,
     token
   });
 }));
@@ -80,10 +81,7 @@ router.post('/login', [
   const { email, password } = req.body;
 
   // Find user
-  const user = await queryOne(
-    'SELECT id, email, password_hash, name, phone, is_verified, is_admin, is_banned FROM users WHERE email = ?',
-    [email]
-  );
+  const user = await queryOne(User, { email });
 
   if (!user) {
     throw new UnauthorizedError('Invalid email or password');
@@ -107,7 +105,7 @@ router.post('/login', [
   );
 
   // Remove password hash from response
-  const { password_hash, ...userWithoutPassword } = user;
+  const { password_hash, ...userWithoutPassword } = user.toObject();
 
   res.json({
     message: 'Login successful',
@@ -126,13 +124,11 @@ router.get('/profile', asyncHandler(async (req, res) => {
     throw new UnauthorizedError('Authentication required');
   }
 
-  const user = await queryOne(
-    'SELECT id, email, name, phone, is_verified, is_admin, created_at FROM users WHERE id = ?',
-    [req.user.id]
-  );
+  const user = await queryOne(User, { id: req.user.id });
+  const { password_hash, ...userWithoutPassword } = user.toObject();
 
   res.json({
-    user
+    user: userWithoutPassword
   });
 }));
 
@@ -155,40 +151,28 @@ router.put('/profile', [
   }
 
   const { name, phone } = req.body;
-  const updates = [];
-  const params = [];
+  const updates = { updated_at: new Date() };
 
   if (name) {
-    updates.push('name = ?');
-    params.push(name);
+    updates.name = name;
   }
 
   if (phone) {
-    updates.push('phone = ?');
-    params.push(phone);
+    updates.phone = phone;
   }
 
-  if (updates.length === 0) {
-    throw new ValidationError('No valid fields to update');
-  }
-
-  updates.push('updated_at = CURRENT_TIMESTAMP');
-  params.push(req.user.id);
-
-  await run(
-    `UPDATE users SET ${updates.join(', ')} WHERE id = ?`,
-    params
+  // Update user
+  const updatedUser = await User.findOneAndUpdate(
+    { id: req.user.id },
+    updates,
+    { new: true }
   );
 
-  // Get updated user
-  const user = await queryOne(
-    'SELECT id, email, name, phone, is_verified, is_admin, created_at FROM users WHERE id = ?',
-    [req.user.id]
-  );
+  const { password_hash, ...userWithoutPassword } = updatedUser.toObject();
 
   res.json({
     message: 'Profile updated successfully',
-    user
+    user: userWithoutPassword
   });
 }));
 
@@ -213,10 +197,7 @@ router.put('/change-password', [
   const { currentPassword, newPassword } = req.body;
 
   // Get current user with password
-  const user = await queryOne(
-    'SELECT password_hash FROM users WHERE id = ?',
-    [req.user.id]
-  );
+  const user = await queryOne(User, { id: req.user.id });
 
   // Verify current password
   const isValidPassword = await bcrypt.compare(currentPassword, user.password_hash);
@@ -229,9 +210,12 @@ router.put('/change-password', [
   const newPasswordHash = await bcrypt.hash(newPassword, saltRounds);
 
   // Update password
-  await run(
-    'UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-    [newPasswordHash, req.user.id]
+  await User.findOneAndUpdate(
+    { id: req.user.id },
+    { 
+      password_hash: newPasswordHash, 
+      updated_at: new Date() 
+    }
   );
 
   res.json({
@@ -253,10 +237,7 @@ router.post('/verify', asyncHandler(async (req, res) => {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
     
-    const user = await queryOne(
-      'SELECT id, email, name, phone, is_verified, is_admin, is_banned FROM users WHERE id = ?',
-      [decoded.userId]
-    );
+    const user = await queryOne(User, { id: decoded.userId });
 
     if (!user) {
       throw new UnauthorizedError('User not found');
@@ -266,9 +247,11 @@ router.post('/verify', asyncHandler(async (req, res) => {
       throw new UnauthorizedError('Account has been suspended');
     }
 
+    const { password_hash, ...userWithoutPassword } = user.toObject();
+
     res.json({
       valid: true,
-      user
+      user: userWithoutPassword
     });
   } catch (error) {
     res.json({

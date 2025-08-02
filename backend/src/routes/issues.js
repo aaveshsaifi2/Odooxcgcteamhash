@@ -5,7 +5,17 @@ const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs');
 const { body, query, validationResult } = require('express-validator');
-const { query: dbQuery, queryOne, run } = require('../database/database');
+const { 
+  Issue, 
+  IssueImage, 
+  IssueStatusLog, 
+  IssueFlag, 
+  User,
+  query: dbQuery, 
+  queryOne, 
+  run,
+  count 
+} = require('../database/database');
 const { asyncHandler, ValidationError, NotFoundError, ForbiddenError } = require('../middleware/errorHandler');
 const { optionalAuth } = require('../middleware/auth');
 
@@ -85,116 +95,86 @@ router.get('/', [
     limit = 20
   } = req.query;
 
-  let sql = `
-    SELECT 
-      i.id, i.title, i.description, i.category, i.status, 
-      i.latitude, i.longitude, i.address, i.is_anonymous,
-      i.flag_count, i.is_hidden, i.created_at, i.updated_at,
-      u.name as reporter_name,
-      COUNT(ii.id) as image_count
-    FROM issues i
-    LEFT JOIN users u ON i.reporter_id = u.id
-    LEFT JOIN issue_images ii ON i.id = ii.issue_id
-    WHERE i.is_hidden = FALSE
-  `;
-
-  const params = [];
-  const conditions = [];
-
-  // Add category filter
+  // Build filter
+  const filter = { is_hidden: false };
+  
   if (category) {
-    conditions.push('i.category = ?');
-    params.push(category);
+    filter.category = category;
   }
 
-  // Add status filter
   if (status) {
-    conditions.push('i.status = ?');
-    params.push(status);
+    filter.status = status;
   }
 
   // Add location-based filtering
   if (latitude && longitude) {
-    // Use SQLite's built-in distance calculation for better performance
-    // This is a simplified version - in production, consider using PostGIS or similar
-    conditions.push(`
-      (i.latitude BETWEEN ? AND ?) AND 
-      (i.longitude BETWEEN ? AND ?)
-    `);
     const latRange = radius / 111; // Rough conversion: 1 degree ≈ 111 km
     const lonRange = radius / (111 * Math.cos(latitude * Math.PI / 180));
-    params.push(latitude - latRange, latitude + latRange, longitude - lonRange, longitude + lonRange);
+    
+    filter.latitude = {
+      $gte: parseFloat(latitude) - latRange,
+      $lte: parseFloat(latitude) + latRange
+    };
+    filter.longitude = {
+      $gte: parseFloat(longitude) - lonRange,
+      $lte: parseFloat(longitude) + lonRange
+    };
   }
 
-  if (conditions.length > 0) {
-    sql += ' AND ' + conditions.join(' AND ');
-  }
+  // Get issues with pagination
+  const skip = (page - 1) * limit;
+  const issues = await Issue.find(filter)
+    .populate('reporter_id', 'name')
+    .sort({ created_at: -1 })
+    .skip(skip)
+    .limit(parseInt(limit))
+    .lean();
 
-  sql += ' GROUP BY i.id ORDER BY i.created_at DESC';
+  // Get image counts for each issue
+  const issueIds = issues.map(issue => issue.id);
+  const imageCounts = await IssueImage.aggregate([
+    { $match: { issue_id: { $in: issueIds } } },
+    { $group: { _id: '$issue_id', count: { $sum: 1 } } }
+  ]);
 
-  // Add pagination
-  const offset = (page - 1) * limit;
-  sql += ' LIMIT ? OFFSET ?';
-  params.push(limit, offset);
+  const imageCountMap = {};
+  imageCounts.forEach(item => {
+    imageCountMap[item._id] = item.count;
+  });
 
-  const issues = await dbQuery(sql, params);
+  // Add image counts and calculate distances
+  const issuesWithCounts = issues.map(issue => ({
+    ...issue,
+    image_count: imageCountMap[issue.id] || 0,
+    reporter_name: issue.reporter_id?.name || 'Anonymous',
+    distance: latitude && longitude ? calculateDistance(
+      parseFloat(latitude),
+      parseFloat(longitude),
+      issue.latitude,
+      issue.longitude
+    ) : undefined
+  }));
 
-  // Calculate exact distances if coordinates provided
+  // Filter by exact distance if coordinates provided
+  let filteredIssues = issuesWithCounts;
   if (latitude && longitude) {
-    issues.forEach(issue => {
-      issue.distance = calculateDistance(
-        parseFloat(latitude),
-        parseFloat(longitude),
-        issue.latitude,
-        issue.longitude
-      );
-    });
-
-    // Filter by exact distance and sort by distance
-    const filteredIssues = issues
+    filteredIssues = issuesWithCounts
       .filter(issue => issue.distance <= radius)
       .sort((a, b) => a.distance - b.distance);
-
-    // Get total count for pagination
-    const countSql = `
-      SELECT COUNT(DISTINCT i.id) as total
-      FROM issues i
-      WHERE i.is_hidden = FALSE
-      ${conditions.length > 0 ? 'AND ' + conditions.join(' AND ') : ''}
-    `;
-    const countResult = await queryOne(countSql, params.slice(0, -2)); // Remove limit and offset
-    const total = countResult.total;
-
-    res.json({
-      issues: filteredIssues,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        pages: Math.ceil(total / limit)
-      }
-    });
-  } else {
-    // Get total count for pagination
-    const countSql = `
-      SELECT COUNT(DISTINCT i.id) as total
-      FROM issues i
-      WHERE i.is_hidden = FALSE
-      ${conditions.length > 0 ? 'AND ' + conditions.join(' AND ') : ''}
-    `;
-    const countResult = await queryOne(countSql, params.slice(0, -2));
-    const total = countResult.total;
-
-    res.json({
-      issues,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        pages: Math.ceil(total / limit)
-      }
-    });
   }
+
+  // Get total count for pagination
+  const total = await count(Issue, filter);
+
+  res.json({
+    issues: filteredIssues,
+    pagination: {
+      page: parseInt(page),
+      limit: parseInt(limit),
+      total,
+      pages: Math.ceil(total / limit)
+    }
+  });
 }));
 
 /**
@@ -204,42 +184,37 @@ router.get('/', [
 router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
   const { id } = req.params;
 
-  const issue = await queryOne(`
-    SELECT 
-      i.*, u.name as reporter_name,
-      COUNT(ii.id) as image_count
-    FROM issues i
-    LEFT JOIN users u ON i.reporter_id = u.id
-    LEFT JOIN issue_images ii ON i.id = ii.issue_id
-    WHERE i.id = ? AND i.is_hidden = FALSE
-    GROUP BY i.id
-  `, [id]);
+  const issue = await Issue.findOne({ id, is_hidden: false })
+    .populate('reporter_id', 'name')
+    .lean();
 
   if (!issue) {
     throw new NotFoundError('Issue not found');
   }
 
   // Get issue images
-  const images = await dbQuery(
-    'SELECT id, image_path, created_at FROM issue_images WHERE issue_id = ? ORDER BY created_at',
-    [id]
-  );
+  const images = await IssueImage.find({ issue_id: id })
+    .sort({ created_at: 1 })
+    .lean();
 
   // Get status logs
-  const statusLogs = await dbQuery(`
-    SELECT 
-      isl.*, u.name as updated_by_name
-    FROM issue_status_logs isl
-    LEFT JOIN users u ON isl.updated_by = u.id
-    WHERE isl.issue_id = ?
-    ORDER BY isl.created_at DESC
-  `, [id]);
+  const statusLogs = await IssueStatusLog.find({ issue_id: id })
+    .populate('updated_by', 'name')
+    .sort({ created_at: -1 })
+    .lean();
+
+  // Format the response
+  const formattedStatusLogs = statusLogs.map(log => ({
+    ...log,
+    updated_by_name: log.updated_by?.name || 'System'
+  }));
 
   res.json({
     issue: {
       ...issue,
+      reporter_name: issue.reporter_id?.name || 'Anonymous',
       images,
-      status_logs: statusLogs
+      status_logs: formattedStatusLogs
     }
   });
 }));
@@ -276,10 +251,17 @@ router.post('/', [
   const reporterId = req.user ? req.user.id : null;
 
   // Create issue
-  await run(`
-    INSERT INTO issues (id, title, description, category, latitude, longitude, address, reporter_id, is_anonymous)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `, [issueId, title, description, category, latitude, longitude, address, reporterId, is_anonymous]);
+  await run(Issue, {
+    id: issueId,
+    title,
+    description,
+    category,
+    latitude: parseFloat(latitude),
+    longitude: parseFloat(longitude),
+    address,
+    reporter_id: reporterId,
+    is_anonymous
+  });
 
   // Process and save images
   const imagePaths = [];
@@ -296,37 +278,38 @@ router.post('/', [
         .toFile(imagePath);
 
       // Save image record
-      await run(
-        'INSERT INTO issue_images (id, issue_id, image_path) VALUES (?, ?, ?)',
-        [imageId, issueId, filename]
-      );
+      await run(IssueImage, {
+        id: imageId,
+        issue_id: issueId,
+        image_path: filename
+      });
 
       imagePaths.push(filename);
     }
   }
 
   // Create initial status log
-  await run(`
-    INSERT INTO issue_status_logs (id, issue_id, status, comment, updated_by)
-    VALUES (?, ?, 'reported', 'Issue reported', ?)
-  `, [uuidv4(), issueId, reporterId]);
+  await run(IssueStatusLog, {
+    id: uuidv4(),
+    issue_id: issueId,
+    status: 'reported',
+    comment: 'Issue reported',
+    updated_by: reporterId
+  });
 
   // Get created issue
-  const issue = await queryOne(`
-    SELECT 
-      i.*, u.name as reporter_name,
-      COUNT(ii.id) as image_count
-    FROM issues i
-    LEFT JOIN users u ON i.reporter_id = u.id
-    LEFT JOIN issue_images ii ON i.id = ii.issue_id
-    WHERE i.id = ?
-    GROUP BY i.id
-  `, [issueId]);
+  const issue = await Issue.findOne({ id: issueId })
+    .populate('reporter_id', 'name')
+    .lean();
+
+  const imageCount = await count(IssueImage, { issue_id: issueId });
 
   res.status(201).json({
     message: 'Issue created successfully',
     issue: {
       ...issue,
+      reporter_name: issue.reporter_id?.name || 'Anonymous',
+      image_count: imageCount,
       images: imagePaths.map(path => ({ image_path: path }))
     }
   });
@@ -353,22 +336,25 @@ router.put('/:id/status', [
   const { status, comment } = req.body;
 
   // Check if issue exists
-  const issue = await queryOne('SELECT id, status FROM issues WHERE id = ?', [id]);
+  const issue = await queryOne(Issue, { id });
   if (!issue) {
     throw new NotFoundError('Issue not found');
   }
 
   // Update issue status
-  await run(
-    'UPDATE issues SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-    [status, id]
+  await Issue.findOneAndUpdate(
+    { id },
+    { status, updated_at: new Date() }
   );
 
   // Create status log
-  await run(`
-    INSERT INTO issue_status_logs (id, issue_id, status, comment, updated_by)
-    VALUES (?, ?, ?, ?, ?)
-  `, [uuidv4(), id, status, comment, req.user.id]);
+  await run(IssueStatusLog, {
+    id: uuidv4(),
+    issue_id: id,
+    status,
+    comment,
+    updated_by: req.user.id
+  });
 
   res.json({
     message: 'Issue status updated successfully',
@@ -396,7 +382,7 @@ router.post('/:id/flag', [
   const { reason } = req.body;
 
   // Check if issue exists
-  const issue = await queryOne('SELECT id, reporter_id FROM issues WHERE id = ?', [id]);
+  const issue = await queryOne(Issue, { id });
   if (!issue) {
     throw new NotFoundError('Issue not found');
   }
@@ -407,35 +393,34 @@ router.post('/:id/flag', [
   }
 
   // Check if user already flagged this issue
-  const existingFlag = await queryOne(
-    'SELECT id FROM issue_flags WHERE issue_id = ? AND user_id = ?',
-    [id, req.user.id]
-  );
+  const existingFlag = await queryOne(IssueFlag, { issue_id: id, user_id: req.user.id });
 
   if (existingFlag) {
     throw new ValidationError('You have already flagged this issue');
   }
 
   // Create flag
-  await run(
-    'INSERT INTO issue_flags (id, issue_id, user_id, reason) VALUES (?, ?, ?, ?)',
-    [uuidv4(), id, req.user.id, reason]
-  );
+  await run(IssueFlag, {
+    id: uuidv4(),
+    issue_id: id,
+    user_id: req.user.id,
+    reason
+  });
 
   // Update flag count
-  await run(
-    'UPDATE issues SET flag_count = flag_count + 1 WHERE id = ?',
-    [id]
+  await Issue.findOneAndUpdate(
+    { id },
+    { $inc: { flag_count: 1 } }
   );
 
   // Auto-hide issue if flagged by multiple users (3 or more)
-  const flagCount = await queryOne(
-    'SELECT COUNT(*) as count FROM issue_flags WHERE issue_id = ?',
-    [id]
-  );
+  const flagCount = await count(IssueFlag, { issue_id: id });
 
-  if (flagCount.count >= 3) {
-    await run('UPDATE issues SET is_hidden = TRUE WHERE id = ?', [id]);
+  if (flagCount >= 3) {
+    await Issue.findOneAndUpdate(
+      { id },
+      { is_hidden: true }
+    );
   }
 
   res.json({
@@ -448,28 +433,39 @@ router.post('/:id/flag', [
  * GET /api/issues/stats/overview
  */
 router.get('/stats/overview', asyncHandler(async (req, res) => {
-  const stats = await queryOne(`
-    SELECT 
-      COUNT(*) as total_issues,
-      COUNT(CASE WHEN status = 'reported' THEN 1 END) as reported,
-      COUNT(CASE WHEN status = 'in_progress' THEN 1 END) as in_progress,
-      COUNT(CASE WHEN status = 'resolved' THEN 1 END) as resolved,
-      COUNT(CASE WHEN is_hidden = TRUE THEN 1 END) as hidden
-    FROM issues
-  `);
+  const stats = await Issue.aggregate([
+    {
+      $group: {
+        _id: null,
+        total_issues: { $sum: 1 },
+        reported: { $sum: { $cond: [{ $eq: ['$status', 'reported'] }, 1, 0] } },
+        in_progress: { $sum: { $cond: [{ $eq: ['$status', 'in_progress'] }, 1, 0] } },
+        resolved: { $sum: { $cond: [{ $eq: ['$status', 'resolved'] }, 1, 0] } },
+        hidden: { $sum: { $cond: ['$is_hidden', 1, 0] } }
+      }
+    }
+  ]);
 
-  const categoryStats = await dbQuery(`
-    SELECT 
-      category,
-      COUNT(*) as count
-    FROM issues
-    WHERE is_hidden = FALSE
-    GROUP BY category
-    ORDER BY count DESC
-  `);
+  const categoryStats = await Issue.aggregate([
+    { $match: { is_hidden: false } },
+    {
+      $group: {
+        _id: '$category',
+        count: { $sum: 1 },
+        resolved_count: { $sum: { $cond: [{ $eq: ['$status', 'resolved'] }, 1, 0] } }
+      }
+    },
+    { $sort: { count: -1 } }
+  ]);
 
   res.json({
-    overview: stats,
+    overview: stats[0] || {
+      total_issues: 0,
+      reported: 0,
+      in_progress: 0,
+      resolved: 0,
+      hidden: 0
+    },
     by_category: categoryStats
   });
 }));

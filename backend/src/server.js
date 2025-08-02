@@ -5,6 +5,7 @@ const rateLimit = require('express-rate-limit');
 const path = require('path');
 require('dotenv').config();
 
+const { connectDB } = require('./database/database');
 const authRoutes = require('./routes/auth');
 const issueRoutes = require('./routes/issues');
 const adminRoutes = require('./routes/admin');
@@ -13,7 +14,10 @@ const { errorHandler } = require('./middleware/errorHandler');
 const { authenticateToken } = require('./middleware/auth');
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5001;
+
+// Connect to MongoDB
+connectDB();
 
 // Security middleware
 app.use(helmet());

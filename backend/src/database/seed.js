@@ -1,6 +1,13 @@
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
-const { run, queryOne, initializeTables } = require('./database');
+const { 
+  connectDB, 
+  User, 
+  Issue, 
+  IssueImage, 
+  IssueStatusLog, 
+  IssueFlag 
+} = require('./database');
 
 /**
  * Seed the database with sample data
@@ -9,19 +16,34 @@ async function seedDatabase() {
   try {
     console.log('🌱 Starting database seeding...');
 
-    // Initialize tables first and wait for completion
-    console.log('🗄️ Initializing database tables...');
-    await initializeTables();
-    console.log('✅ Tables initialized successfully');
+    // Connect to MongoDB
+    console.log('🗄️ Connecting to MongoDB...');
+    await connectDB();
+    console.log('✅ Connected to MongoDB successfully');
+
+    // Clear existing data
+    console.log('🧹 Clearing existing data...');
+    await User.deleteMany({});
+    await Issue.deleteMany({});
+    await IssueImage.deleteMany({});
+    await IssueStatusLog.deleteMany({});
+    await IssueFlag.deleteMany({});
+    console.log('✅ Existing data cleared');
 
     // Create admin user
     const adminId = uuidv4();
     const adminPasswordHash = await bcrypt.hash('admin123', 12);
     
-    await run(`
-      INSERT OR IGNORE INTO users (id, email, password_hash, name, phone, is_verified, is_admin)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [adminId, 'admin@civictrack.com', adminPasswordHash, 'Admin User', '+1234567890', true, true]);
+    const adminUser = new User({
+      id: adminId,
+      email: 'admin@civictrack.com',
+      password_hash: adminPasswordHash,
+      name: 'Admin User',
+      phone: '+1234567890',
+      is_verified: true,
+      is_admin: true
+    });
+    await adminUser.save();
 
     // Create sample users
     const users = [
@@ -48,12 +70,19 @@ async function seedDatabase() {
       }
     ];
 
-    for (const user of users) {
-      const passwordHash = await bcrypt.hash(user.password, 12);
-      await run(`
-        INSERT OR IGNORE INTO users (id, email, password_hash, name, phone, is_verified)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `, [user.id, user.email, passwordHash, user.name, user.phone, true]);
+    const createdUsers = [];
+    for (const userData of users) {
+      const passwordHash = await bcrypt.hash(userData.password, 12);
+      const user = new User({
+        id: userData.id,
+        email: userData.email,
+        password_hash: passwordHash,
+        name: userData.name,
+        phone: userData.phone,
+        is_verified: true
+      });
+      await user.save();
+      createdUsers.push(user);
     }
 
     // Sample issue categories and locations
@@ -65,7 +94,7 @@ async function seedDatabase() {
         latitude: 40.7128,
         longitude: -74.0060,
         address: 'Main Street & Oak Avenue, New York, NY',
-        reporter_id: users[0].id,
+        reporter_id: createdUsers[0].id,
         status: 'reported'
       },
       {
@@ -75,7 +104,7 @@ async function seedDatabase() {
         latitude: 40.7589,
         longitude: -73.9851,
         address: '5th Avenue, New York, NY',
-        reporter_id: users[1].id,
+        reporter_id: createdUsers[1].id,
         status: 'in_progress'
       },
       {
@@ -85,7 +114,7 @@ async function seedDatabase() {
         latitude: 40.7505,
         longitude: -73.9934,
         address: 'Broadway, New York, NY',
-        reporter_id: users[2].id,
+        reporter_id: createdUsers[2].id,
         status: 'resolved'
       },
       {
@@ -95,7 +124,7 @@ async function seedDatabase() {
         latitude: 40.7589,
         longitude: -73.9851,
         address: 'Park Avenue, New York, NY',
-        reporter_id: users[0].id,
+        reporter_id: createdUsers[0].id,
         status: 'reported'
       },
       {
@@ -105,7 +134,7 @@ async function seedDatabase() {
         latitude: 40.7308,
         longitude: -73.9973,
         address: '3rd Street, New York, NY',
-        reporter_id: users[1].id,
+        reporter_id: createdUsers[1].id,
         status: 'in_progress'
       },
       {
@@ -115,72 +144,88 @@ async function seedDatabase() {
         latitude: 40.7589,
         longitude: -73.9851,
         address: 'Madison Avenue, New York, NY',
-        reporter_id: users[2].id,
+        reporter_id: createdUsers[2].id,
         status: 'reported'
       }
     ];
 
     // Create sample issues
+    const createdIssues = [];
     for (const issueData of sampleIssues) {
       const issueId = uuidv4();
       
-      await run(`
-        INSERT OR IGNORE INTO issues (id, title, description, category, latitude, longitude, address, reporter_id, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, [
-        issueId,
-        issueData.title,
-        issueData.description,
-        issueData.category,
-        issueData.latitude,
-        issueData.longitude,
-        issueData.address,
-        issueData.reporter_id,
-        issueData.status
-      ]);
+      const issue = new Issue({
+        id: issueId,
+        title: issueData.title,
+        description: issueData.description,
+        category: issueData.category,
+        latitude: issueData.latitude,
+        longitude: issueData.longitude,
+        address: issueData.address,
+        reporter_id: issueData.reporter_id,
+        status: issueData.status
+      });
+      await issue.save();
+      createdIssues.push(issue);
 
       // Create status logs
-      const statusLogId = uuidv4();
-      await run(`
-        INSERT OR IGNORE INTO issue_status_logs (id, issue_id, status, comment, updated_by)
-        VALUES (?, ?, ?, ?, ?)
-      `, [statusLogId, issueId, 'reported', 'Issue reported', issueData.reporter_id]);
+      const statusLog = new IssueStatusLog({
+        id: uuidv4(),
+        issue_id: issueId,
+        status: 'reported',
+        comment: 'Issue reported',
+        updated_by: issueData.reporter_id
+      });
+      await statusLog.save();
 
       // Add additional status logs for in-progress and resolved issues
       if (issueData.status === 'in_progress') {
-        const inProgressLogId = uuidv4();
-        await run(`
-          INSERT OR IGNORE INTO issue_status_logs (id, issue_id, status, comment, updated_by)
-          VALUES (?, ?, ?, ?, ?)
-        `, [inProgressLogId, issueId, 'in_progress', 'Work has begun on this issue', adminId]);
+        const inProgressLog = new IssueStatusLog({
+          id: uuidv4(),
+          issue_id: issueId,
+          status: 'in_progress',
+          comment: 'Work has begun on this issue',
+          updated_by: adminId
+        });
+        await inProgressLog.save();
       }
 
       if (issueData.status === 'resolved') {
-        const inProgressLogId = uuidv4();
-        const resolvedLogId = uuidv4();
-        
-        await run(`
-          INSERT OR IGNORE INTO issue_status_logs (id, issue_id, status, comment, updated_by)
-          VALUES (?, ?, ?, ?, ?)
-        `, [inProgressLogId, issueId, 'in_progress', 'Work has begun on this issue', adminId]);
+        const inProgressLog = new IssueStatusLog({
+          id: uuidv4(),
+          issue_id: issueId,
+          status: 'in_progress',
+          comment: 'Work has begun on this issue',
+          updated_by: adminId
+        });
+        await inProgressLog.save();
 
-        await run(`
-          INSERT OR IGNORE INTO issue_status_logs (id, issue_id, status, comment, updated_by)
-          VALUES (?, ?, ?, ?, ?)
-        `, [resolvedLogId, issueId, 'resolved', 'Issue has been resolved', adminId]);
+        const resolvedLog = new IssueStatusLog({
+          id: uuidv4(),
+          issue_id: issueId,
+          status: 'resolved',
+          comment: 'Issue has been resolved',
+          updated_by: adminId
+        });
+        await resolvedLog.save();
       }
     }
 
     // Add some flags to issues
-    const flagIssues = await run('SELECT id FROM issues LIMIT 2');
-    if (flagIssues && flagIssues.length > 0) {
-      for (let i = 0; i < 2; i++) {
-        const flagId = uuidv4();
-        await run(`
-          INSERT OR IGNORE INTO issue_flags (id, issue_id, user_id, reason)
-          VALUES (?, ?, ?, ?)
-        `, [flagId, flagIssues[i].id, users[0].id, 'Sample flag for testing']);
-      }
+    for (let i = 0; i < 2; i++) {
+      const flag = new IssueFlag({
+        id: uuidv4(),
+        issue_id: createdIssues[i].id,
+        user_id: createdUsers[0].id,
+        reason: 'Sample flag for testing'
+      });
+      await flag.save();
+
+      // Update flag count on issue
+      await Issue.findOneAndUpdate(
+        { id: createdIssues[i].id },
+        { $inc: { flag_count: 1 } }
+      );
     }
 
     console.log('✅ Database seeded successfully!');
